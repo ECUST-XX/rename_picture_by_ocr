@@ -16,6 +16,74 @@ function curl($opt)
     }
 }
 
+// 模拟协程,类似job
+function runJob($works)
+{
+    $task = function ($mh, $ch1, $func) {
+        $running = 1;
+        while ($running > 0) {
+            curl_multi_exec($mh, $running);
+            yield;
+        }
+        $func(curl_multi_getcontent($ch1));
+        curl_multi_remove_handle($mh, $ch1);
+        curl_multi_close($mh);
+    };
+
+    $jobs = [];
+
+    foreach ($works as $k => $work) {
+        $ch = curl_init();
+        curl_setopt_array($ch, $work['options']);
+        $mh = curl_multi_init();
+        curl_multi_add_handle($mh, $ch);
+        $jobs[$k] = $task($mh, $ch, $work['func']);
+    }
+
+// todo:快是快,但就是会出现cpu过高的问题.....
+    while (!empty($jobs)) {
+        foreach ($jobs as $k => $job) {
+            $job->next();
+            if (!$job->valid()) {
+                unset($jobs[$k]);
+            }
+        }
+    }
+}
+
+function testRunJob()
+{
+    $time = time();
+    $GLOBALS['work_all_over'] = 0;
+    $func = function ($content) {
+        var_dump($content);
+        if ('[]' == $content) {
+            $GLOBALS['work_all_over'] = 1;
+        }
+    };
+    $page = 1;
+    $limit = 5;
+
+    while (0 == $GLOBALS['work_all_over']) {
+        $works = [];
+        for ($i = 0; $i < $limit; $i++) {
+            $works[] = [
+                'options' => [
+                    CURLOPT_URL => 'www.test.com/api/v4?per_page=100&page=' . ($page + $i),
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_CUSTOMREQUEST => "GET",
+                ],
+                'func' => $func,
+            ];
+        }
+        echo "----", $page, "\n";
+        $this->runJob($works);
+        $page += $limit;
+    }
+
+    var_dump(time() - $time);
+}
+
 function getToken($client_id, $client_secret, $grant_type = 'client_credentials')
 {
     $res = curl([
@@ -49,7 +117,7 @@ function getOcr($token, $imageBase64)
                 },
                 $res['words_result'])
         );
-        $ocrName = preg_replace( '/[^\x{4e00}-\x{9fa5}\w]/u', '', $ocrName);
+        $ocrName = preg_replace('/[^\x{4e00}-\x{9fa5}\w]/u', '', $ocrName);
     }
 
     return $ocrName;
